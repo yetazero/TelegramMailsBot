@@ -26,8 +26,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "7610325862:AAHeDDr6w6is-vn1ycucCYM5ObExm3-TgrM"
-MASTER_PASSWORD = "Wtt9631"
+BOT_TOKEN = "YOUR BOT TOKEN HERE"
+MASTER_PASSWORD = "YOUR PASSWORD HERE"
 MASTER_PASSWORD_HASH = hashlib.sha256(MASTER_PASSWORD.encode()).hexdigest()
 
 EMAILS_FILE = "emails.json"
