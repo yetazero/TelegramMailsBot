@@ -28,4 +28,4 @@ A simple Telegram bot designed to securely store and manage email credentials (e
 You can install the necessary libraries using pip:
 
 ```bash
-pip install python-telegram-bot==20.x Pillow pystray
+pip install python-telegram-bot==20.x Pillow pystray pyotp
