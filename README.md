@@ -23,6 +23,7 @@ A simple Telegram bot designed to securely store and manage email credentials (e
 * `python-telegram-bot` library (version 20.x recommended)
 * `Pillow` library (for GUI tray icon)
 * `pystray` library (for system tray icon)
+* `pyotp` 2FA library
 
 You can install the necessary libraries using pip:
 
