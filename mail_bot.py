@@ -7,10 +7,12 @@ import tkinter as tk
 from tkinter import messagebox
 from PIL import Image, ImageDraw
 import pystray
+import pyotp
 import asyncio
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import telegram.error
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -26,8 +28,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "YOUR BOT TOKEN HERE"
-MASTER_PASSWORD = "YOUR PASSWORD HERE"
+BOT_TOKEN = "7610325862:AAHeDDr6w6is-vn1ycucCYM5ObExm3-TgrM"
+MASTER_PASSWORD = "Wtt9631"
 MASTER_PASSWORD_HASH = hashlib.sha256(MASTER_PASSWORD.encode()).hexdigest()
 
 EMAILS_FILE = "emails.json"
@@ -201,11 +203,28 @@ async def send_mail_page(update: Update, context: ContextTypes.DEFAULT_TYPE, cha
         for i in range(start_index, end_index):
             entry_id, entry = display_entries[i]
             tags_info = f"Tags: {truncate_string(entry.get('tags', 'N/A'), MAX_LINE_LENGTH)}\n" if entry.get('tags') else ""
+            two_fa_info_line = f"2FA Info: <tg-spoiler>{truncate_string(entry.get('2fa', 'N/A'), MAX_LINE_LENGTH)}</tg-spoiler>\n"
+            two_fa_code_line = ""
+            secret_2fa = entry.get('2fa')
+            if secret_2fa and secret_2fa != 'N/A':
+                try:
+                    cleaned_secret_2fa = str(secret_2fa).replace(' ', '') # Ensure string and remove spaces
+                    if cleaned_secret_2fa: # Proceed if secret is not empty after cleaning
+                        totp = pyotp.TOTP(cleaned_secret_2fa)
+                        current_otp = totp.now()
+                        two_fa_code_line = f"2FA Code: <code>{current_otp}</code>\n"
+                    else:
+                        two_fa_code_line = "2FA Code: <i>Invalid secret</i>\n"
+                except Exception as e:
+                    logger.warning(f"Could not generate TOTP for entry {entry_id} (secret starts with '{str(secret_2fa)[:5]}...'): {e}")
+                    two_fa_code_line = "2FA Code: <i>Error generating</i>\n"
+
             message_text += (
                 f"ID: {entry_id}\n"
                 f"Email: {truncate_string(entry['email'], MAX_LINE_LENGTH)}\n"
                 f"Password: {truncate_string(entry['password'], MAX_LINE_LENGTH)}\n"
-                f"2FA Info: {truncate_string(entry.get('2fa', 'N/A'), MAX_LINE_LENGTH)}\n"
+                f"{two_fa_info_line}"
+                f"{two_fa_code_line}"
                 f"{tags_info}\n"
             )
 
@@ -228,6 +247,9 @@ async def send_mail_page(update: Update, context: ContextTypes.DEFAULT_TYPE, cha
     filter_button_text = "Filter: Gmail" if gmail_filter_active else "Filter: All"
     keyboard.append([InlineKeyboardButton(filter_button_text, callback_data="toggle_gmail_filter")])
 
+    if any(entry.get('2fa') and entry.get('2fa') != 'N/A' and len(str(entry.get('2fa')).replace(' ', '')) >= 16 for _, entry in display_entries[start_index:end_index]):
+        keyboard.append([InlineKeyboardButton("🔄 Update 2FA Codes", callback_data=f"update_2fa_codes_{page}")])
+
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -236,6 +258,18 @@ async def send_mail_page(update: Update, context: ContextTypes.DEFAULT_TYPE, cha
             await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='HTML')
         else:
             await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='HTML')
+    except telegram.error.BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.info(f"Message not modified when trying to update mail page: {e}")
+                if update.callback_query:
+                    try:
+                        await update.callback_query.answer()
+                    except Exception as e_ans:
+                        logger.info(f"Error trying to answer callback query silently: {e_ans}")
+            else:
+                logger.error(f"Error sending mail page (BadRequest): {e}")
+                error_message_target = update.callback_query.message if update.callback_query else update.message
+                await error_message_target.reply_text("An error occurred displaying emails (BadRequest). Please try again or check logs.")
     except Exception as e:
         logger.error(f"Error sending mail page: {e}")
         error_message_target = update.callback_query.message if update.callback_query else update.message
@@ -256,6 +290,29 @@ async def paginate_mail_callback(update: Update, context: ContextTypes.DEFAULT_T
         await send_mail_page(update, context, chat_id, page)
     except (ValueError, IndexError):
         await query.edit_message_text("Error: Invalid page navigation.")
+
+async def update_2fa_codes_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.message.chat_id
+
+    if get_user_state(chat_id) != "AUTHENTICATED":
+        await query.edit_message_text("Access denied. Please authenticate via /start.")
+        return
+
+    try:
+        page_str = query.data.split('_')[-1]
+        page = int(page_str)
+        await send_mail_page(update, context, chat_id, page)
+    except (IndexError, ValueError) as e:
+        logger.error(f"Error parsing page from callback_data '{query.data}': {e}")
+        current_page = context.user_data.get('current_mail_page', 0)
+        try:
+            await query.edit_message_text(f"⚠️ Error updating 2FA codes. Displaying page {current_page + 1}.")
+        except Exception as e_reply:
+            logger.error(f"Error sending error message for 2FA update: {e_reply}")
+            await query.message.reply_text(f"⚠️ Error updating 2FA codes. Please try again.")
+
 
 async def toggle_gmail_filter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -667,6 +724,7 @@ def run_bot():
     telegram_application.add_handler(CommandHandler("mail", mail_command))
     telegram_application.add_handler(CallbackQueryHandler(paginate_mail_callback, pattern=r"^mail_page_\d+$"))
     telegram_application.add_handler(CallbackQueryHandler(toggle_gmail_filter, pattern=r"^toggle_gmail_filter$"))
+    telegram_application.add_handler(CallbackQueryHandler(update_2fa_codes_callback, pattern=r"^update_2fa_codes_\d+$"))
 
     telegram_application.add_handler(add_mail_conv_handler)
     telegram_application.add_handler(edit_mail_conv_handler)
